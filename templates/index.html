@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Transfer Value Predictor</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;500;600;700&family=Barlow+Condensed:wght@600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%2337003c'/%3E%3Cpath d='M8 22 L16 8 L24 22 Z' fill='%2300ff85'/%3E%3C/svg%3E">
+</head>
+<body>
+  <header class="topbar">
+    <div class="wrap topbar-inner">
+      <a class="brand" href="#" aria-label="Transfer Value Predictor home">
+        <svg class="brand-mark" viewBox="0 0 40 40" aria-hidden="true">
+          <rect width="40" height="40" rx="9" fill="#fff"/>
+          <path d="M9 28 L20 9 L31 28 Z" fill="#37003c"/>
+          <path d="M15 28 L20 19 L25 28 Z" fill="#00ff85"/>
+        </svg>
+        <span class="brand-text">
+          <span class="brand-title">Transfer Value Predictor</span>
+          <span class="brand-sub">Premier League &middot; linear regression</span>
+        </span>
+      </a>
+      <div class="topbar-meta" id="topbar-meta"></div>
+    </div>
+    <div class="gradient-rule"></div>
+  </header>
+
+  <section class="search-band">
+    <div class="wrap">
+      <div class="search" role="combobox" aria-expanded="false" aria-owns="search-results" aria-haspopup="listbox">
+        <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M16.5 16.5 L21 21" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
+        <input id="search-input" type="search" autocomplete="off" placeholder="Search a player or club&hellip;" aria-label="Search players" aria-controls="search-results" disabled>
+        <ul id="search-results" class="search-results" role="listbox" hidden></ul>
+      </div>
+      <div class="quick-picks" id="quick-picks"></div>
+    </div>
+  </section>
+
+  <main class="wrap" id="main">
+    <section id="setup" class="card setup" hidden>
+      <h2 class="section-title">Let's get the data in</h2>
+      <p id="setup-message" class="muted"></p>
+      <ol class="setup-steps">
+        <li>Grab a free API key from <a href="https://www.football-data.org/client/register" target="_blank" rel="noopener">football-data.org</a>.</li>
+        <li>Put it in a <code>.env</code> file next to <code>app.py</code>: <code>FOOTBALL_DATA_API_KEY=your-key</code> <span id="key-status"></span></li>
+        <li>Download the stats and train the model: <code>python -m predictor all</code></li>
+        <li>Refresh this page.</li>
+      </ol>
+    </section>
+
+    <div id="dashboard" hidden>
+      <!-- Player hero + valuation -->
+      <section class="hero" id="hero">
+        <div class="hero-player">
+          <div class="hero-shape" aria-hidden="true"></div>
+          <div class="hero-number" id="hero-number" aria-hidden="true"></div>
+          <div class="hero-photo"><img id="hero-photo" alt=""><div class="avatar" id="hero-avatar" hidden></div></div>
+          <div class="hero-info">
+            <div class="hero-club"><img id="hero-crest" alt="" hidden><span id="hero-club"></span></div>
+            <h1 class="hero-name"><span id="hero-first"></span><span id="hero-last"></span></h1>
+            <div class="chips" id="hero-chips"></div>
+            <p class="hero-news" id="hero-news" hidden></p>
+          </div>
+        </div>
+        <div class="hero-value">
+          <div class="value-pair">
+            <div class="value-block model">
+              <span class="value-label">Model value</span>
+              <span class="value-number" id="value-model"></span>
+            </div>
+            <div class="value-block market">
+              <span class="value-label">Market value</span>
+              <span class="value-number" id="value-market"></span>
+            </div>
+          </div>
+          <div class="verdict" id="verdict"></div>
+          <div class="chart-box short"><canvas id="chart-compare" aria-label="Model value compared with market value"></canvas></div>
+        </div>
+      </section>
+
+      <section class="stat-strip" id="stat-strip" aria-label="Per-season averages"></section>
+
+      <section class="grid-2">
+        <article class="card">
+          <header class="card-head">
+            <h2 class="section-title">What drives the valuation</h2>
+            <p class="muted small" id="drivers-caption"></p>
+          </header>
+          <div class="chart-box"><canvas id="chart-drivers" aria-label="Feature contributions to the valuation"></canvas></div>
+        </article>
+        <article class="card">
+          <header class="card-head">
+            <h2 class="section-title">Season by season</h2>
+            <p class="muted small" id="seasons-caption"></p>
+          </header>
+          <div class="chart-box"><canvas id="chart-seasons" aria-label="Goals, assists and minutes per season"></canvas></div>
+        </article>
+      </section>
+
+      <!-- Plug-in lab -->
+      <section class="lab card" id="lab">
+        <header class="card-head lab-head">
+          <div>
+            <span class="eyebrow">Scouting lab</span>
+            <h2 class="section-title">Plug in any player</h2>
+            <p class="muted small">Start from the selected player and tweak, or type in anyone's numbers. Stats are per Premier League season.</p>
+          </div>
+          <div class="lab-actions">
+            <button class="btn ghost" type="button" id="lab-load">Load selected player</button>
+            <button class="btn ghost" type="button" id="lab-clear">Blank player</button>
+          </div>
+        </header>
+        <div class="lab-body">
+          <form class="lab-form" id="lab-form" autocomplete="off">
+            <label class="field wide">
+              <span>Player name <em>(label only)</em></span>
+              <input type="text" id="lab-name" maxlength="60" placeholder="e.g. My wonderkid">
+            </label>
+            <fieldset class="field wide">
+              <legend>Position</legend>
+              <div class="segmented" id="lab-position"></div>
+            </fieldset>
+            <fieldset class="field wide">
+              <legend>Physical form</legend>
+              <div class="segmented form-seg" id="lab-form-state"></div>
+            </fieldset>
+            <div class="sliders" id="lab-sliders"></div>
+            <label class="field wide">
+              <span>Actual transfer / market value, &euro;m <em>(optional, for comparison)</em></span>
+              <input type="number" id="lab-actual" min="0" max="500" step="0.5" inputmode="decimal" placeholder="e.g. 65">
+            </label>
+          </form>
+          <div class="lab-result">
+            <span class="value-label">Model says</span>
+            <span class="lab-value" id="lab-value">&ndash;</span>
+            <div class="verdict" id="lab-verdict"></div>
+            <div class="chart-box short"><canvas id="chart-lab" aria-label="Lab prediction compared with the value you entered"></canvas></div>
+            <ul class="warnings" id="lab-warnings"></ul>
+          </div>
+        </div>
+      </section>
+
+      <section class="grid-2">
+        <article class="card">
+          <header class="card-head">
+            <h2 class="section-title">Model vs market</h2>
+            <p class="muted small">Every player with a market value. Above the line: the model rates them higher than the market. Click a dot to open the player.</p>
+          </header>
+          <div class="chart-box tall"><canvas id="chart-scatter" aria-label="Scatter of model value against market value"></canvas></div>
+        </article>
+        <article class="card">
+          <header class="card-head board-head">
+            <h2 class="section-title">The table</h2>
+            <div class="tabs" role="tablist">
+              <button role="tab" class="tab active" data-board="under" aria-selected="true">Bargains</button>
+              <button role="tab" class="tab" data-board="over" aria-selected="false">Overpriced</button>
+              <button role="tab" class="tab" data-board="value" aria-selected="false">Most valuable</button>
+            </div>
+          </header>
+          <table class="board" id="board">
+            <thead><tr><th>#</th><th>Player</th><th class="num">Market</th><th class="num">Model</th><th class="num">Diff</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </article>
+      </section>
+
+      <section class="card model-card" id="model-card">
+        <header class="card-head">
+          <span class="eyebrow">Under the bonnet</span>
+          <h2 class="section-title">How the model works</h2>
+        </header>
+        <div class="metrics" id="metrics"></div>
+        <div class="model-body">
+          <div>
+            <h3 class="sub-title">Learned effects on value</h3>
+            <table class="effects" id="effects"><tbody></tbody></table>
+          </div>
+          <div class="model-notes" id="model-notes"></div>
+        </div>
+      </section>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <div class="wrap">
+      <p>Stats: <a href="https://www.football-data.org" target="_blank" rel="noopener">football-data.org</a>. Minutes, availability and photos: Fantasy Premier League public API. Market values: <code>data/market_values.csv</code> (approximate reference figures &mdash; edit them to match your source).</p>
+      <p class="muted">An independent fan project, not affiliated with or endorsed by the Premier League.</p>
+    </div>
+  </footer>
+
+  <script src="{{ url_for('static', filename='vendor/chart.umd.min.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+</body>
+</html>
