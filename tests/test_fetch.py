@@ -49,7 +49,7 @@ def test_fetch_defaults_to_last_three_completed_seasons(paths):
     raw = paths.RAW_DIR
     assert json.loads((raw / "manifest.json").read_text())["current_season"] == 2026
     assert (raw / "scorers_2025.json").exists() and not (raw / "scorers_2023.json").exists()
-    assert (raw / "fpl" / "element_1.json").exists()  # keyed by FPL's stable `code`
+    assert (raw / "fpl" / "element_1_2026.json").exists()  # FPL's stable `code` + season
 
 
 def test_fpl_outage_is_not_fatal(paths):
@@ -64,3 +64,23 @@ def test_repeated_or_unsorted_seasons_are_fetched_once_in_order(paths):
     manifest = fetch_all("key", seasons=[2025, 2024, 2025], fd_client=FakeFootballData(),
                          use_fpl=False, log=lambda m: None)
     assert manifest["seasons"] == [2024, 2025]
+
+
+def test_summaries_are_refetched_when_a_new_fpl_season_starts(paths):
+    class SeasonFpl(FakeFpl):
+        def __init__(self, deadline):
+            super().__init__()
+            self.deadline = deadline
+
+        def bootstrap(self):
+            return {**super().bootstrap(), "events": [{"id": 1, "deadline_time": self.deadline}]}
+
+    first = SeasonFpl("2025-08-15T17:30:00Z")
+    fetch_all("key", seasons=[2024], fd_client=FakeFootballData(), fpl_client=first, log=lambda m: None)
+    same = SeasonFpl("2025-08-15T17:30:00Z")
+    fetch_all("key", seasons=[2024], fd_client=FakeFootballData(), fpl_client=same, log=lambda m: None)
+    later = SeasonFpl("2026-08-14T17:30:00Z")
+    manifest = fetch_all("key", seasons=[2024], fd_client=FakeFootballData(), fpl_client=later,
+                         log=lambda m: None)
+    assert (first.summaries, same.summaries, later.summaries) == ([101], [], [101])
+    assert manifest["fpl_season"] == 2026

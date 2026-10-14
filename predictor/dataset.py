@@ -9,7 +9,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from . import config
-from .fpl import ELEMENT_TYPE_TO_POSITION, form_from_status, summary_filename
+from .fpl import ELEMENT_TYPE_TO_POSITION, form_from_status, fpl_season, summary_filename
 from .jsonio import read_json, write_json
 from .names import assign_matches, clubs_match
 
@@ -206,8 +206,9 @@ def build_dataset(raw_dir: Path | None = None,
     if manifest.get("fpl") and bootstrap_path.exists():
         bootstrap = read_json(bootstrap_path)
         fpl_matches = match_fpl_elements(bios, records, bootstrap)
+    summary_season = manifest.get("fpl_season") or fpl_season(bootstrap) or current_season
     for pid, element in fpl_matches.items():
-        summary_path = raw_dir / "fpl" / summary_filename(element)
+        summary_path = raw_dir / "fpl" / summary_filename(element, summary_season)
         summary = read_json(summary_path) if summary_path.exists() else None
         minutes = fpl_minutes_by_season(element, summary, current_season)
         for rec in records[pid]:
@@ -237,10 +238,12 @@ def build_dataset(raw_dir: Path | None = None,
                 if any(clubs_match(c, f) for c in _club_names(spell) for f in fpl_clubs):
                     team = {k: spell.get(k) for k in TEAM_KEYS}
                     break
-        # Per-season rates, weighted by matchdays so a season in progress counts for
-        # what it is rather than as a full 38-game season.
-        matchdays = sum(r["matchdays"] for r in recs)
+        # Per-season rates, weighted by matchdays so a season in progress counts for what
+        # it is rather than as a full 38-game season. Never scaled *up*, though: a player
+        # with only a few matchdays of data keeps their raw counts instead of having
+        # 2 goals in 1 game stretched to 76 a season.
         full = config.LEAGUE_MATCHES_PER_SEASON
+        matchdays = max(sum(r["matchdays"] for r in recs), full)
 
         def per_season(key: str) -> float:
             return full * sum(r[key] for r in recs) / matchdays

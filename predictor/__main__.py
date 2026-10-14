@@ -29,18 +29,18 @@ def cmd_fetch(args: argparse.Namespace) -> None:
 
 def cmd_train(args: argparse.Namespace) -> None:
     dataset = build_dataset()
-    # Train before saving anything, so a failed run leaves the old dataset + model pair intact.
-    model = train(dataset["players"], folds=args.folds)
-    save_dataset(dataset)
-    save_model(model)
     with_values = sum(1 for p in dataset["players"] if p["market_value_eur_m"])
-    print(f"Dataset: {len(dataset['players'])} players, {with_values} with a market value "
-          f"-> {config.PLAYERS_PATH}")
+    print(f"Dataset: {len(dataset['players'])} players, {with_values} with a market value")
     if dataset["unmatched_market_values"]:
         print(f"  {len(dataset['unmatched_market_values'])} market-value rows had no stats match "
               f"(not in the fetched seasons' scorer lists): "
               f"{', '.join(dataset['unmatched_market_values'][:12])}"
               f"{' ...' if len(dataset['unmatched_market_values']) > 12 else ''}")
+    # Train before saving anything, so a failed run leaves the old dataset + model pair intact.
+    model = train(dataset["players"], folds=args.folds)
+    save_dataset(dataset)
+    save_model(model)
+    print(f"Saved {config.PLAYERS_PATH}")
 
     m = model["metrics"]
     print(f"Model trained on {m['n_train']} players -> {config.MODEL_PATH}")

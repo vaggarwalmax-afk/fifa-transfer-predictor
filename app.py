@@ -25,7 +25,7 @@ def _load(path: Path) -> dict | None:
     if not cached or cached[0] != mtime:
         try:
             cached = (mtime, json.loads(path.read_text(encoding="utf-8")))
-        except ValueError:  # corrupt or empty file: keep serving what we had
+        except (OSError, ValueError):  # unreadable, corrupt or empty: keep serving what we had
             return cached[1] if cached else None
         _cache[path] = cached
     return cached[1]

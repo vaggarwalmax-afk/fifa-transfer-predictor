@@ -82,7 +82,9 @@ actual fee into the lab to compare against.
   predicts negative prices for squad players.
 - **Features:**
   - per-season averages of goals, assists, minutes and appearances over the fetched seasons (with
-    `--include-current`, the season in progress counts in proportion to the matchdays played)
+    `--include-current`, the season in progress counts in proportion to the matchdays played; a
+    player with under 38 matchdays of data in total keeps their raw counts rather than being
+    scaled up to a full season)
   - age, plus age² centred on 26, so value can peak mid-career and then decline
   - position (one-hot, midfielder as the baseline)
   - form (one-hot, fit as the baseline)

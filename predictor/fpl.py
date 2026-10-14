@@ -65,11 +65,21 @@ def form_from_status(status: str | None, chance_of_playing: int | None = None) -
     return STATUS_TO_FORM.get(status)
 
 
-def summary_filename(element: dict) -> str:
+def fpl_season(bootstrap: dict) -> int | None:
+    """Start year of the FPL game a bootstrap snapshot belongs to (from gameweek 1's deadline)."""
+    for event in bootstrap.get("events") or []:
+        deadline = str(event.get("deadline_time") or "")
+        if deadline[:4].isdigit():
+            return int(deadline[:4])
+    return None
+
+
+def summary_filename(element: dict, season: int | None) -> str:
     """Cache file for a player's element-summary.
 
-    Keyed by `code`, which is stable across seasons; element ids are renumbered every
-    season, so an id-keyed cache would hand last season's player 381 to this season's.
+    Keyed by `code`, which is stable across seasons (element ids are renumbered every
+    season), plus the FPL season, because `history_past` gains a row each new season.
     """
     code = element.get("code")
-    return f"element_{code}.json" if code is not None else f"element_id{element['id']}.json"
+    who = code if code is not None else f"id{element['id']}"
+    return f"element_{who}_{season}.json" if season is not None else f"element_{who}.json"

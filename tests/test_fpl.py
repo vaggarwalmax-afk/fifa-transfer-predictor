@@ -1,4 +1,4 @@
-from predictor.fpl import form_from_status, summary_filename
+from predictor.fpl import form_from_status, fpl_season, summary_filename
 
 
 def test_form_from_status():
@@ -12,6 +12,13 @@ def test_form_from_status():
     assert form_from_status(None) is None
 
 
-def test_summary_cache_is_keyed_by_stable_code():
-    assert summary_filename({"id": 381, "code": 223340}) == "element_223340.json"
-    assert summary_filename({"id": 381}) == "element_id381.json"
+def test_summary_cache_is_keyed_by_stable_code_and_fpl_season():
+    assert summary_filename({"id": 381, "code": 223340}, 2026) == "element_223340_2026.json"
+    assert summary_filename({"id": 381}, 2026) == "element_id381_2026.json"
+    assert summary_filename({"id": 381, "code": 223340}, None) == "element_223340.json"
+
+
+def test_fpl_season_from_first_gameweek_deadline():
+    assert fpl_season({"events": [{"id": 1, "deadline_time": "2026-08-14T17:30:00Z"}]}) == 2026
+    assert fpl_season({"events": []}) is None
+    assert fpl_season({}) is None

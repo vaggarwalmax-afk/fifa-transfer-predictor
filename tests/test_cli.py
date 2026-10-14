@@ -1,13 +1,16 @@
 from predictor.__main__ import main
 
 
-def test_failed_training_keeps_the_previous_dataset_and_model(small_raw):
+def test_failed_training_keeps_the_previous_dataset_and_model(small_raw, capsys):
     # small_raw has 4 players, too few to train on, so `train` must fail without touching files.
     small_raw.PLAYERS_PATH.write_text('{"old": "dataset"}', encoding="utf-8")
     small_raw.MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
     small_raw.MODEL_PATH.write_text('{"old": "model"}', encoding="utf-8")
     assert main(["train"]) == 1
     assert small_raw.PLAYERS_PATH.read_text(encoding="utf-8") == '{"old": "dataset"}'
+    out = capsys.readouterr().out  # the summary that explains the error is still shown
+    assert "Dataset: 4 players, 4 with a market value" in out
+    assert "Nobody Atall" in out
     assert small_raw.MODEL_PATH.read_text(encoding="utf-8") == '{"old": "model"}'
 
 

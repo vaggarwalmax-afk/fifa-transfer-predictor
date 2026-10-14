@@ -124,8 +124,19 @@ def test_market_values_csv_with_bom_and_bad_numbers(tmp_path):
 
 def test_cached_history_of_another_player_is_ignored(small_raw):
     # e.g. a summary cached under this code by an older version that keyed files by element id
-    write_json(small_raw.RAW_DIR / "fpl" / "element_223340.json", {"history_past": [
+    write_json(small_raw.RAW_DIR / "fpl" / "element_223340_2026.json", {"history_past": [
         {"season_name": "2024/25", "element_code": 118748, "minutes": 3371}]})
     saka = next(p for p in build_dataset(today=date(2026, 10, 1))["players"] if p["name"] == "Bukayo Saka")
     assert saka["seasons"][0]["minutes_estimated"]
     assert saka["seasons"][0]["minutes"] != 3371
+
+
+def test_a_few_matchdays_are_not_stretched_to_a_full_season(paths):
+    raw = paths.RAW_DIR
+    write_json(raw / "manifest.json", {"fetched_at": "2026-08-20T12:00:00", "current_season": 2026,
+                                       "seasons": [2026], "fpl": False})
+    write_json(raw / "scorers_2026.json", {"season": {"currentMatchday": 1}, "scorers": [
+        scorer(11, "New Signing", "New", "Signing", "2001-01-01", "Offence", "ARS", 1, 2, 1)]})
+    paths.MARKET_VALUES_PATH.write_text("name,club,market_value_eur_m\n", encoding="utf-8")
+    f = build_dataset(today=date(2026, 8, 20))["players"][0]["features"]
+    assert (f["goals"], f["assists"], f["matches"]) == (2, 1, 1)  # raw counts, not 76 a season

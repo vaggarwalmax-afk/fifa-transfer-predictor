@@ -12,7 +12,7 @@ from . import config
 from .dataset import load_season_records, match_fpl_elements
 from .football_data import (FootballDataClient, FootballDataError, current_season_start_year,
                             recent_seasons)
-from .fpl import FplClient, summary_filename
+from .fpl import FplClient, fpl_season, summary_filename
 from .jsonio import write_json as _write
 
 
@@ -55,16 +55,18 @@ def fetch_all(
         raise FootballDataError("No season could be downloaded; check your API key and plan.")
 
     fpl_ok = False
+    summary_season = None
     if use_fpl:
         try:
             fpl = fpl_client or FplClient()
             bootstrap = fpl.bootstrap()
             _write(raw_dir / "fpl_bootstrap.json", bootstrap)
+            summary_season = fpl_season(bootstrap) or current
             bios, records = load_season_records(raw_dir, fetched)
             matched = match_fpl_elements(bios, records, bootstrap)
             log(f"FPL: matched {len(matched)}/{len(bios)} players; downloading season histories...")
             for element in matched.values():
-                path = raw_dir / "fpl" / summary_filename(element)
+                path = raw_dir / "fpl" / summary_filename(element, summary_season)
                 if refresh or not path.exists():
                     _write(path, fpl.element_summary(element["id"]))
             fpl_ok = True
@@ -78,6 +80,7 @@ def fetch_all(
         "current_season": current,
         "seasons": fetched,
         "fpl": fpl_ok,
+        "fpl_season": summary_season if fpl_ok else None,
     }
     _write(raw_dir / "manifest.json", manifest)
     return manifest
