@@ -24,7 +24,7 @@
   const $ = (sel, root = document) => root.querySelector(sel);
   const state = {
     data: null, players: [], byId: new Map(), selected: null, charts: {},
-    board: "under", lab: { ...BLANK_PLAYER }, labTimer: null, labSeq: 0,
+    board: "under", lab: { ...BLANK_PLAYER }, labTimer: null, labSeq: 0, selectSeq: 0,
   };
 
   // ------------------------------------------------------------------ formatting
@@ -36,7 +36,11 @@
   };
   const absPct = (p) => `${Math.abs(Math.round(p * 100))}%`;
   const fmtNum = (v, d = 1) => (Number.isInteger(v) ? String(v) : v.toFixed(d));
-  const fold = (s) => (s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+  // Same folding as predictor/names.py: letters like ø and æ don't decompose under NFD.
+  const SPECIAL_LETTERS = { "ø": "o", "æ": "ae", "ß": "ss", "ł": "l", "đ": "d", "ı": "i", "œ": "oe", "þ": "th" };
+  const fold = (s) => (s || "").toLowerCase()
+    .replace(/[øæßłđıœþ]/g, (c) => SPECIAL_LETTERS[c])
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "");
   const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
   const clubName = (team) => (team && (team.team_short || team.team)) || "";
   const initials = (name) => {
@@ -188,7 +192,7 @@
         indexAxis: "y", maintainAspectRatio: false,
         layout: { padding: { right: 8 } },
         scales: {
-          x: { min: -reach, max: reach, grid: { color: C.line }, border: { display: false }, ticks: { callback: (v) => `${v > 0 ? "+" : ""}${Math.round(v)}%`, maxRotation: 0, maxTicksLimit: 7 } },
+          x: { min: -reach, max: reach, grid: { color: C.line }, border: { display: false }, ticks: { callback: (v) => `${v > 0 ? "+" : ""}${Math.round(v)}%`, maxRotation: 0, maxTicksLimit: 7, includeBounds: false } },
           y: { grid: { display: false }, border: { display: false }, ticks: { color: C.purple, font: { weight: "700" } } },
         },
         plugins: {
@@ -213,9 +217,12 @@
           { type: "bar", label: "Assists", data: seasons.map((s) => s.assists), backgroundColor: C.pink, borderRadius: 4, yAxisID: "y", order: 2 },
           {
             type: "line", label: estimated ? "Minutes (some estimated)" : "Minutes", data: seasons.map((s) => s.minutes),
-            borderColor: C.violet, backgroundColor: C.cyan, pointBackgroundColor: C.cyan, pointBorderColor: C.purple,
+            borderColor: C.violet, backgroundColor: C.cyan, pointBorderColor: C.purple,
             pointRadius: 5, borderWidth: 3, tension: 0.3, yAxisID: "y1", order: 1,
-            segment: estimated ? { borderDash: [6, 4] } : undefined,
+            pointBackgroundColor: seasons.map((s) => (s.minutes_estimated ? "#fff" : C.cyan)),
+            segment: {
+              borderDash: (ctx) => (seasons[ctx.p0DataIndex].minutes_estimated || seasons[ctx.p1DataIndex].minutes_estimated ? [6, 4] : undefined),
+            },
           },
         ],
       },
@@ -231,9 +238,10 @@
       },
     });
     const teams = [...new Set(seasons.map((s) => s.team_short || s.team).filter(Boolean))];
+    const estimatedLabels = seasons.filter((s) => s.minutes_estimated).map((s) => s.label);
     $("#seasons-caption").textContent =
       `${seasons.length} season${seasons.length === 1 ? "" : "s"} in the data${teams.length ? ` · ${teams.join(", ")}` : ""}` +
-      (estimated ? " · dashed minutes are estimated from appearances" : "");
+      (estimatedLabels.length ? ` · minutes estimated from appearances for ${estimatedLabels.join(", ")} (hollow points)` : "");
   }
 
   function scatterChart() {
@@ -254,7 +262,7 @@
             backgroundColor: pts.map((p) => (p.predicted_value_eur_m >= p.market_value_eur_m ? "rgba(0,200,105,.75)" : "rgba(233,0,82,.7)")),
             pointRadius: 5, pointHoverRadius: 8,
           },
-          { type: "line", label: "Model = market", data: [{ x: lo, y: lo }, { x: hi, y: hi }], borderColor: C.purple, borderDash: [6, 5], borderWidth: 1.5, pointRadius: 0, order: 2 },
+          { type: "line", label: "Model = market", data: [{ x: lo, y: lo }, { x: hi, y: hi }], borderColor: C.purple, borderDash: [6, 5], borderWidth: 1.5, pointRadius: 0, pointHitRadius: 0, order: 2 },
         ],
       },
       options: {
@@ -268,7 +276,7 @@
           tooltip: {
             filter: (item) => item.datasetIndex !== 2,
             callbacks: {
-              title: (items) => items[0].raw.name,
+              title: (items) => (items[0] ? items[0].raw.name : ""),
               label: (c) => [`Market ${fmtEur(c.raw.x)}`, `Model  ${fmtEur(c.raw.y)}`],
             },
           },
@@ -319,9 +327,16 @@
     let active = -1;
     input.disabled = false;
 
-    const close = () => { list.hidden = true; box.setAttribute("aria-expanded", "false"); active = -1; };
+    const close = () => {
+      list.hidden = true;
+      box.setAttribute("aria-expanded", "false");
+      input.removeAttribute("aria-activedescendant");
+      active = -1;
+    };
     const highlight = () => {
       [...list.children].forEach((li, i) => li.setAttribute("aria-selected", i === active ? "true" : "false"));
+      if (active >= 0 && results[active]) input.setAttribute("aria-activedescendant", `sr-${active}`);
+      else input.removeAttribute("aria-activedescendant");
       if (list.children[active]) list.children[active].scrollIntoView({ block: "nearest" });
     };
     const choose = (i) => {
@@ -368,13 +383,15 @@
   // ------------------------------------------------------------------ player view
 
   async function selectPlayer(id, scroll = false) {
+    const seq = ++state.selectSeq;
     let player;
     try {
       player = await api(`/api/players/${id}`);
     } catch (err) {
-      console.error(err);
+      if (seq === state.selectSeq) console.error(err);
       return;
     }
+    if (seq !== state.selectSeq) return; // the user has already picked someone else
     state.selected = player;
     history.replaceState(null, "", `#player-${id}`);
     renderHero(player);
@@ -655,7 +672,12 @@
     renderModelCard();
     setupLab();
 
-    const fromHash = Number((location.hash.match(/^#player-(\d+)$/) || [])[1]);
+    const hashId = () => Number((location.hash.match(/^#player-(\d+)$/) || [])[1]);
+    window.addEventListener("hashchange", () => {
+      const id = hashId();
+      if (state.byId.has(id) && (!state.selected || state.selected.id !== id)) selectPlayer(id, true);
+    });
+    const fromHash = hashId();
     const first = state.byId.has(fromHash) ? fromHash : (state.players.find((p) => p.market_value_eur_m) || state.players[0]).id;
     await selectPlayer(first);
   }

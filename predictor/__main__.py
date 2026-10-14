@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 
 import requests
@@ -17,7 +16,7 @@ from .model import save_model, train
 
 def cmd_fetch(args: argparse.Namespace) -> None:
     fetch_all(
-        api_key=os.environ.get(config.FOOTBALL_DATA_API_KEY_ENV, ""),
+        api_key=config.api_key(),
         seasons=args.seasons,
         season_count=args.season_count,
         include_current=args.include_current,
@@ -30,7 +29,10 @@ def cmd_fetch(args: argparse.Namespace) -> None:
 
 def cmd_train(args: argparse.Namespace) -> None:
     dataset = build_dataset()
+    # Train before saving anything, so a failed run leaves the old dataset + model pair intact.
+    model = train(dataset["players"], folds=args.folds)
     save_dataset(dataset)
+    save_model(model)
     with_values = sum(1 for p in dataset["players"] if p["market_value_eur_m"])
     print(f"Dataset: {len(dataset['players'])} players, {with_values} with a market value "
           f"-> {config.PLAYERS_PATH}")
@@ -40,8 +42,6 @@ def cmd_train(args: argparse.Namespace) -> None:
               f"{', '.join(dataset['unmatched_market_values'][:12])}"
               f"{' ...' if len(dataset['unmatched_market_values']) > 12 else ''}")
 
-    model = train(dataset["players"], folds=args.folds)
-    save_model(model)
     m = model["metrics"]
     print(f"Model trained on {m['n_train']} players -> {config.MODEL_PATH}")
     print(f"  R^2 (log value): {m['r2_log_in_sample']:.2f} in-sample, {m['r2_log_cv']:.2f} "

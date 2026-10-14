@@ -10,17 +10,34 @@ from __future__ import annotations
 import difflib
 import re
 import unicodedata
+from functools import lru_cache
 from typing import Iterable, Sequence
 
 # Letters that NFKD does not decompose into ASCII + combining mark.
 _SPECIAL = str.maketrans({"ø": "o", "Ø": "o", "æ": "ae", "Æ": "ae", "ß": "ss", "ł": "l",
                           "Ł": "l", "đ": "d", "Đ": "d", "ı": "i", "œ": "oe", "þ": "th"})
 _CLUB_NOISE = {"fc", "afc", "cf", "the"}
+# FPL and football-data.org spell a few clubs differently ("Nott'm Forest"/"NFO" vs
+# "Nottingham Forest FC"/"NOT"); rewrite them to one spelling before comparing.
+_CLUB_ALIASES = [
+    (re.compile(r"\bnott m\b"), "nottingham"),
+    (re.compile(r"\butd\b"), "united"),
+    (re.compile(r"\bspurs\b"), "tottenham hotspur"),
+    (re.compile(r"\bwolves\b"), "wolverhampton wanderers"),
+    (re.compile(r"^nfo$"), "not"),
+    (re.compile(r"^shu$"), "she"),
+]
 
 MATCH_THRESHOLD = 0.85
 TEAM_BONUS = 0.1
+AMBIGUITY_MARGIN = 0.05
+FUZZY_WEIGHT = 0.85
+# A fuzzy score below (threshold - margin - bonus) can neither pass nor make a passing match
+# look ambiguous, so pairs whose cheap upper bound is under this ratio skip the slow ratio().
+_FUZZY_FLOOR = (MATCH_THRESHOLD - AMBIGUITY_MARGIN - TEAM_BONUS) / FUZZY_WEIGHT
 
 
+@lru_cache(maxsize=16384)
 def normalize(name: str | None) -> str:
     if not name:
         return ""
@@ -44,7 +61,10 @@ def name_similarity(a: str | None, b: str | None) -> float:
         # "Gabriel Martinelli" inside "Gabriel Martinelli Silva" is safe; a lone
         # "Gabriel" could be several people, so it needs the club bonus to pass.
         return 0.9 if len(small) >= 2 else 0.78
-    return 0.85 * difflib.SequenceMatcher(None, na, nb).ratio()
+    matcher = difflib.SequenceMatcher(None, na, nb)
+    if matcher.real_quick_ratio() < _FUZZY_FLOOR or matcher.quick_ratio() < _FUZZY_FLOOR:
+        return 0.0
+    return FUZZY_WEIGHT * matcher.ratio()
 
 
 def best_name_similarity(names_a: Iterable[str | None], names_b: Iterable[str | None]) -> float:
@@ -52,21 +72,31 @@ def best_name_similarity(names_a: Iterable[str | None], names_b: Iterable[str | 
     return max((name_similarity(a, b) for a in names_a if a for b in names_b), default=0.0)
 
 
+def _club_key(name: str | None) -> str:
+    key = normalize(name)
+    for pattern, replacement in _CLUB_ALIASES:
+        key = pattern.sub(replacement, key)
+    return key
+
+
 def clubs_match(a: str | None, b: str | None) -> bool:
-    ta = set(normalize(a).split()) - _CLUB_NOISE
-    tb = set(normalize(b).split()) - _CLUB_NOISE
+    ka, kb = _club_key(a), _club_key(b)
+    ta, tb = set(ka.split()) - _CLUB_NOISE, set(kb.split()) - _CLUB_NOISE
     if not ta or not tb:
         return False
-    return ta <= tb or tb <= ta or normalize(a) == normalize(b)
+    return ta <= tb or tb <= ta or ka == kb
 
 
-def match_one(
+Candidate = tuple[Sequence[str | None], Sequence[str | None]]  # (names, clubs)
+
+
+def best_match(
     names: Sequence[str | None],
     clubs: Sequence[str | None],
-    candidates: Sequence[tuple[Sequence[str | None], Sequence[str | None]]],
+    candidates: Sequence[Candidate],
     threshold: float = MATCH_THRESHOLD,
-) -> int | None:
-    """Index of the candidate (names, clubs) that best matches, or None if unclear."""
+) -> tuple[int, float] | None:
+    """(index, score) of the candidate that best matches, or None if unclear."""
     scored = []
     for i, (cand_names, cand_clubs) in enumerate(candidates):
         score = best_name_similarity(names, cand_names)
@@ -81,6 +111,41 @@ def match_one(
     best_score, best_idx = scored[0]
     if best_score < threshold:
         return None
-    if len(scored) > 1 and best_score - scored[1][0] < 0.05:
+    if len(scored) > 1 and best_score - scored[1][0] < AMBIGUITY_MARGIN:
         return None  # two players look equally plausible; better unmatched than wrong
-    return best_idx
+    return best_idx, best_score
+
+
+def match_one(
+    names: Sequence[str | None],
+    clubs: Sequence[str | None],
+    candidates: Sequence[Candidate],
+    threshold: float = MATCH_THRESHOLD,
+) -> int | None:
+    match = best_match(names, clubs, candidates, threshold)
+    return match[0] if match else None
+
+
+def assign_matches(
+    queries: Sequence[Candidate],
+    candidates: Sequence[Candidate],
+    threshold: float = MATCH_THRESHOLD,
+) -> dict[int, int]:
+    """Pair queries with distinct candidates, strongest matches first.
+
+    Assigning in score order (not input order) stops a weak partial match such as
+    "Gabriel Jesus" -> "Gabriel" from taking a candidate that an exact match needs.
+    """
+    proposals = []
+    for qi, (names, clubs) in enumerate(queries):
+        match = best_match(names, clubs, candidates, threshold)
+        if match:
+            proposals.append((match[1], qi, match[0]))
+    proposals.sort(key=lambda p: (-p[0], p[1]))
+    assigned: dict[int, int] = {}
+    taken: set[int] = set()
+    for _score, qi, ci in proposals:
+        if ci not in taken:
+            assigned[qi] = ci
+            taken.add(ci)
+    return assigned

@@ -23,7 +23,10 @@ def _load(path: Path) -> dict | None:
     mtime = path.stat().st_mtime
     cached = _cache.get(path)
     if not cached or cached[0] != mtime:
-        cached = (mtime, json.loads(path.read_text(encoding="utf-8")))
+        try:
+            cached = (mtime, json.loads(path.read_text(encoding="utf-8")))
+        except ValueError:  # corrupt or empty file: keep serving what we had
+            return cached[1] if cached else None
         _cache[path] = cached
     return cached[1]
 
@@ -57,9 +60,9 @@ def state():
     dataset = _load(config.PLAYERS_PATH)
     model = _load(config.MODEL_PATH)
     if not dataset or not model:
-        missing = "data" if not dataset else "a trained model"
+        missing = "data" if not dataset else "trained model"
         return jsonify({"ready": False, "message": f"No {missing} yet.",
-                        "api_key_set": bool(os.environ.get(config.FOOTBALL_DATA_API_KEY_ENV))})
+                        "api_key_set": bool(config.api_key())})
     players = [_summary(p, model) for p in dataset["players"] if p["features"].get("age") is not None]
     return jsonify({
         "ready": True,
@@ -107,11 +110,14 @@ LIMITS = {"goals": (0, 60), "assists": (0, 40), "minutes": (0, 3420), "matches":
 def parse_features(body: dict) -> dict:
     features = {}
     for name, (lo, hi) in LIMITS.items():
+        raw = body.get(name)
+        if isinstance(raw, bool):  # float(True) == 1.0, but true is not a goal count
+            raise ValueError(f"'{name}' must be a number")
         try:
-            value = float(body[name])
-        except (KeyError, TypeError, ValueError):
+            value = float(raw)
+        except (TypeError, ValueError, OverflowError):
             raise ValueError(f"'{name}' must be a number") from None
-        if not lo <= value <= hi:
+        if not lo <= value <= hi:  # also rejects NaN and infinities
             raise ValueError(f"'{name}' must be between {lo} and {hi}")
         features[name] = value
     if body.get("position") not in config.POSITIONS:
@@ -123,5 +129,5 @@ def parse_features(body: dict) -> dict:
 
 
 if __name__ == "__main__":
-    app.run(host=os.environ.get("HOST", "127.0.0.1"), port=int(os.environ.get("PORT", 5000)),
-            debug=bool(os.environ.get("FLASK_DEBUG")))
+    # Debug mode follows FLASK_DEBUG, parsed by Flask itself (so "0"/"false" mean off).
+    app.run(host=os.environ.get("HOST", "127.0.0.1"), port=int(os.environ.get("PORT", 5000)))

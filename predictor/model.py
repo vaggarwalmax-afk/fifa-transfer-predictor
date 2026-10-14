@@ -11,7 +11,6 @@ app can score players without scikit-learn.
 
 from __future__ import annotations
 
-import json
 import math
 from datetime import datetime
 from pathlib import Path
@@ -21,6 +20,7 @@ from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import KFold
 
 from . import config
+from .jsonio import read_json, write_json
 
 AGE_CENTRE = 26.0
 BASE_POSITION = "Midfielder"
@@ -67,6 +67,8 @@ def training_rows(players: list[dict]) -> list[dict]:
 
 
 def train(players: list[dict], folds: int = 5, seed: int = 42) -> dict:
+    if folds < 2:
+        raise ValueError("Cross-validation needs at least 2 folds.")
     rows = training_rows(players)
     if len(rows) < MIN_TRAINING_PLAYERS:
         raise ValueError(
@@ -100,11 +102,14 @@ def train(players: list[dict], folds: int = 5, seed: int = 42) -> dict:
     coef.update(zip((COLUMNS[i] for i in active), reg.coef_.tolist()))
     coef_vec = np.array([coef[c] for c in COLUMNS])
     means = dict(zip(COLUMNS, X.mean(axis=0).tolist()))
+    ranges = {c: [float(min(f[c] for f in feats)), float(max(f[c] for f in feats))]
+              for c in config.NUMERIC_FEATURES}
     peak_age = None
     if coef["age_sq"] < 0:
-        peak_age = round(AGE_CENTRE - coef["age"] / (2 * coef["age_sq"]), 1)
+        vertex = AGE_CENTRE - coef["age"] / (2 * coef["age_sq"])
+        if ranges["age"][0] <= vertex <= ranges["age"][1]:  # a peak outside the data means nothing
+            peak_age = round(vertex, 1)
 
-    all_feats = [p["features"] for p in players if p["features"].get("age") is not None]
     return {
         "trained_at": datetime.now().isoformat(timespec="seconds"),
         "target": "log(market value in EUR millions)",
@@ -125,10 +130,7 @@ def train(players: list[dict], folds: int = 5, seed: int = 42) -> dict:
             "median_abs_pct_error_cv": float(np.median(np.abs(oof_value - actual) / actual)),
         },
         "per_unit_effects": per_unit_effects(coef, dropped),
-        "feature_ranges": {
-            c: [float(min(f[c] for f in all_feats)), float(max(f[c] for f in all_feats))]
-            for c in config.NUMERIC_FEATURES
-        },
+        "feature_ranges": ranges,  # of the training rows, which is what "extrapolation" is about
         "category_counts": {
             "position": {p: sum(f["position"] == p for f in feats) for p in config.POSITIONS},
             "form": {k: sum(f["form"] == k for f in feats) for k in config.FORMS},
@@ -182,6 +184,8 @@ def predict(model: dict, features: dict) -> dict:
     warnings = [f"{name.title()} is not used by this model: {why}."
                 for name, why in model.get("dropped_features", {}).items()]
     for c in config.NUMERIC_FEATURES:
+        if c in model.get("dropped_features", {}):
+            continue
         lo, hi = model["feature_ranges"][c]
         if not lo <= float(features[c]) <= hi:
             warnings.append(f"{c.title()} is outside the range seen in training "
@@ -202,14 +206,12 @@ def predict(model: dict, features: dict) -> dict:
 
 
 def save_model(model: dict, path: Path | None = None) -> None:
-    path = path or config.MODEL_PATH
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(model, indent=1), encoding="utf-8")
+    write_json(path or config.MODEL_PATH, model)
 
 
 def load_model(path: Path | None = None) -> dict | None:
     path = path or config.MODEL_PATH
-    return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+    return read_json(path) if path.exists() else None
 
 
 def _r2(y: np.ndarray, pred: np.ndarray) -> float:

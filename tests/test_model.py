@@ -63,3 +63,37 @@ def test_drops_minutes_when_they_are_mostly_estimated():
     result = predict(model, {"goals": 10, "assists": 5, "minutes": 2500, "matches": 30, "age": 26,
                              "position": "Forward", "form": "fit"})
     assert any("Minutes is not used" in w for w in result["warnings"])
+
+
+def test_no_range_warning_for_a_dropped_feature():
+    players = synthetic_players()
+    for p in players:
+        p["features"]["minutes"] = round(p["features"]["matches"] * 80)
+        p["minutes_estimated"] = True
+    model = train(players)
+    result = predict(model, {"goals": 10, "assists": 5, "minutes": 10, "matches": 30, "age": 26,
+                             "position": "Forward", "form": "fit"})
+    assert not any("Minutes is outside" in w for w in result["warnings"])
+
+
+def test_extrapolation_range_comes_from_training_rows_only():
+    players = synthetic_players()
+    star = {**players[0], "id": 999, "market_value_eur_m": None,
+            "features": {**players[0]["features"], "goals": 59}}
+    model = train(players + [star])
+    assert model["feature_ranges"]["goals"][1] < 59
+    result = predict(model, {**star["features"], "goals": 50})
+    assert any("Goals is outside" in w for w in result["warnings"])
+
+
+def test_peak_age_only_reported_inside_the_training_ages():
+    players = synthetic_players()
+    for p in players:  # value falls with age throughout; the parabola's vertex is at -24
+        age = p["features"]["age"]
+        p["market_value_eur_m"] = math.exp(3 - 0.05 * age - 0.0005 * (age - 26) ** 2)
+    assert train(players)["peak_age"] is None
+
+
+def test_needs_at_least_two_folds():
+    with pytest.raises(ValueError, match="2 folds"):
+        train(synthetic_players(), folds=1)

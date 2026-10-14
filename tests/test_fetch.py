@@ -49,7 +49,7 @@ def test_fetch_defaults_to_last_three_completed_seasons(paths):
     raw = paths.RAW_DIR
     assert json.loads((raw / "manifest.json").read_text())["current_season"] == 2026
     assert (raw / "scorers_2025.json").exists() and not (raw / "scorers_2023.json").exists()
-    assert (raw / "fpl" / "element_101.json").exists()
+    assert (raw / "fpl" / "element_1.json").exists()  # keyed by FPL's stable `code`
 
 
 def test_fpl_outage_is_not_fatal(paths):
@@ -58,3 +58,9 @@ def test_fpl_outage_is_not_fatal(paths):
                          fpl_client=FakeFpl(fail=True), log=logs.append)
     assert manifest["fpl"] is False
     assert any("FPL unavailable" in line for line in logs)
+
+
+def test_repeated_or_unsorted_seasons_are_fetched_once_in_order(paths):
+    manifest = fetch_all("key", seasons=[2025, 2024, 2025], fd_client=FakeFootballData(),
+                         use_fpl=False, log=lambda m: None)
+    assert manifest["seasons"] == [2024, 2025]

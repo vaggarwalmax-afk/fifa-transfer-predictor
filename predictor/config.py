@@ -33,6 +33,7 @@ MODEL_PATH = MODEL_DIR / "model.json"
 # football-data.org (https://www.football-data.org/documentation/api)
 FOOTBALL_DATA_BASE_URL = "https://api.football-data.org/v4"
 FOOTBALL_DATA_API_KEY_ENV = "FOOTBALL_DATA_API_KEY"
+API_KEY_PLACEHOLDER = "your-key-here"  # what .env.example ships with
 COMPETITION = "PL"
 DEFAULT_SEASON_COUNT = 3
 DEFAULT_SCORERS_LIMIT = 100
@@ -49,6 +50,12 @@ POSITIONS = ["Goalkeeper", "Defender", "Midfielder", "Forward"]
 FORMS = ["fit", "weak", "injured"]
 NUMERIC_FEATURES = ["goals", "assists", "minutes", "matches", "age"]
 LEAGUE_MATCHES_PER_SEASON = 38
+
+
+def api_key() -> str:
+    """The football-data.org key, or '' if it is unset or still the .env.example placeholder."""
+    key = os.environ.get(FOOTBALL_DATA_API_KEY_ENV, "").strip()
+    return "" if key == API_KEY_PLACEHOLDER else key
 
 
 def season_label(start_year: int) -> str:

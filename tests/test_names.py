@@ -1,4 +1,4 @@
-from predictor.names import clubs_match, match_one, name_similarity, normalize
+from predictor.names import assign_matches, clubs_match, match_one, name_similarity, normalize
 
 
 def test_normalize_strips_accents_and_special_letters():
@@ -37,3 +37,42 @@ def test_clubs_match_ignores_fc_suffix():
     assert clubs_match("Arsenal FC", "Arsenal")
     assert clubs_match("AFC Bournemouth", "Bournemouth")
     assert not clubs_match("Manchester United FC", "Manchester City")
+
+
+def test_assignment_goes_to_the_strongest_match_not_the_first_asked():
+    candidates = [(["Gabriel dos Santos Magalhães", "Gabriel"], ["Arsenal", "ARS"])]
+    queries = [(["Gabriel Jesus"], ["Arsenal FC"]),  # partial match, asked first
+               (["Gabriel"], ["Arsenal FC"])]        # exact match
+    assert assign_matches(queries, candidates) == {1: 0}
+
+
+def test_fpl_club_spellings_match_football_data():
+    assert clubs_match("Nott'm Forest", "Nottingham Forest FC")
+    assert clubs_match("NFO", "NOT")
+    assert clubs_match("Sheffield Utd", "Sheffield United FC")
+    assert clubs_match("Spurs", "Tottenham Hotspur FC")
+
+
+def test_fuzzy_shortcut_does_not_change_any_match(monkeypatch):
+    import random
+    import string
+
+    import predictor.names as names
+
+    rng = random.Random(7)
+
+    def typo(word):
+        i = rng.randrange(len(word))
+        return word[:i] + rng.choice(string.ascii_lowercase) + word[i + 1:]
+
+    base = ["".join(rng.choice("aeioulnrst") for _ in range(rng.randint(5, 9))) for _ in range(120)]
+    candidates = [([f"{a} {b}"], [rng.choice(["Arsenal", "Chelsea", "Everton"])])
+                  for a, b in zip(base[::2], base[1::2])]
+    queries = [([f"{typo(n[0].split()[0])} {n[0].split()[1]}"], [c[0]]) for n, c in candidates]
+    queries += [([f"{rng.choice(base)} {rng.choice(base)}"], ["Arsenal"]) for _ in range(40)]
+
+    fast = names.assign_matches(queries, candidates)
+    monkeypatch.setattr(names, "_FUZZY_FLOOR", 0.0)  # always compute the full ratio
+    names.normalize.cache_clear()
+    assert names.assign_matches(queries, candidates) == fast
+    assert fast  # the typo'd names do match

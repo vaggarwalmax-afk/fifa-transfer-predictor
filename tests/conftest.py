@@ -82,11 +82,11 @@ def small_raw(paths):
              "chance_of_playing_next_round": 0, "news": "Knee injury - Expected back 01 Nov"},
         ],
     })
-    write_json(raw / "fpl" / "element_101.json", {"history_past": [
+    write_json(raw / "fpl" / "element_223340.json", {"history_past": [
         {"season_name": "2024/25", "minutes": 2500, "goals_scored": 12, "assists": 10},
         {"season_name": "2025/26", "minutes": 3000, "goals_scored": 16, "assists": 12},
     ]})
-    write_json(raw / "fpl" / "element_102.json", {"history_past": [
+    write_json(raw / "fpl" / "element_184029.json", {"history_past": [
         {"season_name": "2024/25", "minutes": 2720, "goals_scored": 8, "assists": 9},
     ]})
     paths.MARKET_VALUES_PATH.write_text(

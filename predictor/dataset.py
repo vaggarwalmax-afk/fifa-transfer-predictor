@@ -3,18 +3,18 @@
 from __future__ import annotations
 
 import csv
-import json
+import math
 from collections import defaultdict
 from datetime import date, datetime
 from pathlib import Path
-from statistics import mean
-from typing import Any
 
 from . import config
-from .fpl import ELEMENT_TYPE_TO_POSITION, form_from_status
-from .names import match_one
+from .fpl import ELEMENT_TYPE_TO_POSITION, form_from_status, summary_filename
+from .jsonio import read_json, write_json
+from .names import assign_matches, clubs_match
 
 DEFAULT_MINUTES_PER_MATCH = 75.0
+TEAM_KEYS = ("team", "team_short", "team_tla", "crest")
 
 
 # --------------------------------------------------------------------------- helpers
@@ -43,9 +43,9 @@ def age_on(dob: str | None, on: date) -> float | None:
     return round((on - born).days / 365.25, 1)
 
 
-def form_from_availability(matches: float) -> str:
-    """Fallback when FPL is unavailable: how much of the season the player was on the pitch."""
-    share = matches / config.LEAGUE_MATCHES_PER_SEASON
+def form_from_availability(matches: float, matchdays: int = config.LEAGUE_MATCHES_PER_SEASON) -> str:
+    """Fallback when FPL is unavailable: how much of the season so far the player featured in."""
+    share = matches / max(1, matchdays)
     if share >= 0.5:
         return "fit"
     if share >= 0.25:
@@ -53,20 +53,28 @@ def form_from_availability(matches: float) -> str:
     return "injured"
 
 
-def _read_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
 def _fd_names(bio: dict) -> list[str]:
     full = " ".join(p for p in (bio.get("firstName"), bio.get("lastName")) if p)
     return [n for n in (bio.get("name"), full) if n]
 
 
+def _club_names(team: dict) -> list[str]:
+    return [team.get(k) for k in ("team", "team_short", "team_tla") if team.get(k)]
+
+
 def _fd_clubs(records: list[dict]) -> list[str]:
-    clubs = []
-    for r in records:
-        clubs += [r.get("team"), r.get("team_short"), r.get("team_tla")]
-    return [c for c in clubs if c]
+    """Every club a player turned out for, including both clubs in a mid-season move."""
+    return [c for r in records for spell in r.get("spells", [r]) for c in _club_names(spell)]
+
+
+def _season_matchdays(scorers: dict) -> int:
+    """Matchdays played in the season: 38 once it's over, fewer for the season in progress."""
+    try:
+        played = int((scorers.get("season") or {}).get("currentMatchday") or 0)
+    except (TypeError, ValueError):
+        played = 0
+    full = config.LEAGUE_MATCHES_PER_SEASON
+    return played if 0 < played < full else full
 
 
 # --------------------------------------------------------------------------- football-data
@@ -79,7 +87,9 @@ def load_season_records(raw_dir: Path, seasons: list[int]) -> tuple[dict[int, di
         path = raw_dir / f"scorers_{season}.json"
         if not path.exists():
             continue
-        for entry in _read_json(path).get("scorers", []):
+        data = read_json(path)
+        matchdays = _season_matchdays(data)
+        for entry in data.get("scorers", []):
             player, team = entry.get("player") or {}, entry.get("team") or {}
             pid = player.get("id")
             if pid is None:
@@ -92,47 +102,47 @@ def load_season_records(raw_dir: Path, seasons: list[int]) -> tuple[dict[int, di
                 "assists": entry.get("assists") or 0,
                 "penalties": entry.get("penalties") or 0,
             }
+            spell = {"team": team.get("name"), "team_short": team.get("shortName"),
+                     "team_tla": team.get("tla"), "crest": team.get("crest"), "matches": stats["matches"]}
             if rec:  # listed twice in a season (moved clubs mid-season): add the spells up
                 for k, v in stats.items():
                     rec[k] += v
+                rec["spells"].append(spell)
             else:
-                rec = records[pid][season] = {"season": season, "label": config.season_label(season), **stats}
-            rec.update({
-                "team": team.get("name"),
-                "team_short": team.get("shortName"),
-                "team_tla": team.get("tla"),
-                "crest": team.get("crest"),
-            })
+                rec = records[pid][season] = {"season": season, "label": config.season_label(season),
+                                              "matchdays": matchdays, **stats, "spells": [spell]}
+            # Show the club the player featured most for until FPL says which is current.
+            main = max(rec["spells"], key=lambda s: s["matches"])
+            rec.update({k: main[k] for k in TEAM_KEYS})
     return bios, {pid: [by_season[s] for s in sorted(by_season)] for pid, by_season in records.items()}
 
 
 # --------------------------------------------------------------------------- FPL
 
+def fpl_team_names(bootstrap: dict, element: dict) -> list[str]:
+    team = next((t for t in bootstrap.get("teams", []) if t.get("id") == element.get("team")), {})
+    return [n for n in (team.get("name"), team.get("short_name")) if n]
+
+
 def match_fpl_elements(bios: dict[int, dict], records: dict[int, list[dict]],
                        bootstrap: dict) -> dict[int, dict]:
     """football-data player id -> FPL element, for players we can match confidently."""
-    teams = {t["id"]: t for t in bootstrap.get("teams", [])}
     elements = bootstrap.get("elements", [])
-    candidates = []
-    for el in elements:
-        team = teams.get(el.get("team"), {})
-        candidates.append((
-            [f"{el.get('first_name', '')} {el.get('second_name', '')}".strip(), el.get("web_name")],
-            [team.get("name"), team.get("short_name")],
-        ))
-    matched: dict[int, dict] = {}
-    taken: set[int] = set()
-    for pid, bio in bios.items():
-        idx = match_one(_fd_names(bio), _fd_clubs(records.get(pid, [])), candidates)
-        if idx is not None and idx not in taken:
-            matched[pid] = elements[idx]
-            taken.add(idx)
-    return matched
+    candidates = [
+        ([f"{el.get('first_name', '')} {el.get('second_name', '')}".strip(), el.get("web_name")],
+         fpl_team_names(bootstrap, el))
+        for el in elements
+    ]
+    pids = list(bios)
+    queries = [(_fd_names(bios[pid]), _fd_clubs(records.get(pid, []))) for pid in pids]
+    return {pids[qi]: elements[ci] for qi, ci in assign_matches(queries, candidates).items()}
 
 
 def fpl_minutes_by_season(element: dict, summary: dict | None, current_season: int | None) -> dict[int, int]:
     minutes: dict[int, int] = {}
     for past in (summary or {}).get("history_past", []):
+        if past.get("element_code") not in (None, element.get("code")):
+            continue  # a cached history that belongs to someone else
         try:
             start = int(str(past["season_name"])[:4])
         except (KeyError, ValueError):
@@ -149,13 +159,14 @@ def load_market_values(path: Path) -> list[dict]:
     if not path.exists():
         return []
     rows = []
-    with path.open(newline="", encoding="utf-8") as fh:
+    # utf-8-sig: Excel's "CSV UTF-8" starts the file with a byte-order mark.
+    with path.open(newline="", encoding="utf-8-sig") as fh:
         for row in csv.DictReader(fh):
             try:
                 value = float(row.get("market_value_eur_m") or "")
             except ValueError:
                 continue
-            if value <= 0 or not (row.get("name") or "").strip():
+            if not math.isfinite(value) or value <= 0 or not (row.get("name") or "").strip():
                 continue
             form = (row.get("form") or "").strip().lower()
             rows.append({
@@ -179,8 +190,8 @@ def build_dataset(raw_dir: Path | None = None,
     manifest_path = raw_dir / "manifest.json"
     if not manifest_path.exists():
         raise FileNotFoundError(f"No fetched data in {raw_dir}. Run `python -m predictor fetch` first.")
-    manifest = _read_json(manifest_path)
-    seasons: list[int] = manifest["seasons"]
+    manifest = read_json(manifest_path)
+    seasons: list[int] = sorted(set(manifest["seasons"]))
     current_season = manifest.get("current_season")
     as_of = today or datetime.fromisoformat(manifest["fetched_at"]).date()
 
@@ -190,12 +201,14 @@ def build_dataset(raw_dir: Path | None = None,
 
     # Minutes + availability + photos from FPL, when it was fetched.
     fpl_matches: dict[int, dict] = {}
+    bootstrap: dict = {}
     bootstrap_path = raw_dir / "fpl_bootstrap.json"
     if manifest.get("fpl") and bootstrap_path.exists():
-        fpl_matches = match_fpl_elements(bios, records, _read_json(bootstrap_path))
+        bootstrap = read_json(bootstrap_path)
+        fpl_matches = match_fpl_elements(bios, records, bootstrap)
     for pid, element in fpl_matches.items():
-        summary_path = raw_dir / "fpl" / f"element_{element['id']}.json"
-        summary = _read_json(summary_path) if summary_path.exists() else None
+        summary_path = raw_dir / "fpl" / summary_filename(element)
+        summary = read_json(summary_path) if summary_path.exists() else None
         minutes = fpl_minutes_by_season(element, summary, current_season)
         for rec in records[pid]:
             if rec["season"] in minutes:
@@ -217,6 +230,21 @@ def build_dataset(raw_dir: Path | None = None,
         recs = records[pid]
         latest = recs[-1]
         element = fpl_matches.get(pid)
+        team = {k: latest.get(k) for k in TEAM_KEYS}
+        if element:  # FPL knows the current club; prefer that spell after a mid-season move
+            fpl_clubs = fpl_team_names(bootstrap, element)
+            for spell in latest["spells"]:
+                if any(clubs_match(c, f) for c in _club_names(spell) for f in fpl_clubs):
+                    team = {k: spell.get(k) for k in TEAM_KEYS}
+                    break
+        # Per-season rates, weighted by matchdays so a season in progress counts for
+        # what it is rather than as a full 38-game season.
+        matchdays = sum(r["matchdays"] for r in recs)
+        full = config.LEAGUE_MATCHES_PER_SEASON
+
+        def per_season(key: str) -> float:
+            return full * sum(r[key] for r in recs) / matchdays
+
         position = normalize_position(bio.get("position"), bio.get("section"))
         if position is None and element:
             position = ELEMENT_TYPE_TO_POSITION.get(element.get("element_type"))
@@ -232,16 +260,16 @@ def build_dataset(raw_dir: Path | None = None,
             "shirt_number": bio.get("shirtNumber"),
             "position": position or "Midfielder",
             "position_detail": bio.get("position") or bio.get("section"),
-            "team": {k: latest.get(k) for k in ("team", "team_short", "team_tla", "crest")},
+            "team": team,
             "seasons": recs,
             "features": {
-                "goals": round(mean(r["goals"] for r in recs), 2),
-                "assists": round(mean(r["assists"] for r in recs), 2),
-                "minutes": round(mean(r["minutes"] for r in recs), 1),
-                "matches": round(mean(r["matches"] for r in recs), 2),
+                "goals": round(per_season("goals"), 2),
+                "assists": round(per_season("assists"), 2),
+                "minutes": round(min(per_season("minutes"), full * 90), 1),
+                "matches": round(min(per_season("matches"), full), 2),
                 "age": age_on(bio.get("dateOfBirth"), as_of),
                 "position": position or "Midfielder",
-                "form": fpl_form or form_from_availability(latest["matches"]),
+                "form": fpl_form or form_from_availability(latest["matches"], latest["matchdays"]),
             },
             "form_source": "fpl" if fpl_form else "availability",
             "minutes_estimated": any(r["minutes_estimated"] for r in recs),
@@ -259,14 +287,11 @@ def build_dataset(raw_dir: Path | None = None,
 
     # Attach reference market values (the regression target).
     candidates = [(_fd_names(bios[p["id"]]) or [p["name"]], _fd_clubs(p["seasons"])) for p in players]
-    unmatched_values, claimed = [], {}
-    for row in load_market_values(market_values_path):
-        idx = match_one([row["name"]], [row["club"]], candidates)
-        if idx is None or idx in claimed:
-            unmatched_values.append(row["name"])
-            continue
-        claimed[idx] = row["name"]
-        p = players[idx]
+    rows = load_market_values(market_values_path)
+    assigned = assign_matches([([r["name"]], [r["club"]]) for r in rows], candidates)
+    unmatched_values = [r["name"] for i, r in enumerate(rows) if i not in assigned]
+    for ri, idx in assigned.items():
+        row, p = rows[ri], players[idx]
         p["market_value_eur_m"] = row["value"]
         p["market_value_as_of"] = row["as_of"]
         if row["photo_url"]:
@@ -295,11 +320,9 @@ def build_dataset(raw_dir: Path | None = None,
 
 
 def save_dataset(dataset: dict, path: Path | None = None) -> None:
-    path = path or config.PLAYERS_PATH
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(dataset, indent=1, ensure_ascii=False), encoding="utf-8")
+    write_json(path or config.PLAYERS_PATH, dataset)
 
 
 def load_dataset(path: Path | None = None) -> dict | None:
     path = path or config.PLAYERS_PATH
-    return _read_json(path) if path.exists() else None
+    return read_json(path) if path.exists() else None

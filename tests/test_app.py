@@ -1,3 +1,5 @@
+import os
+
 import pytest
 
 import app as webapp
@@ -63,6 +65,9 @@ def test_predict_custom_player(client, trained):
 
 @pytest.mark.parametrize("bad", [
     {"goals": "lots"},
+    {"goals": True},
+    {"goals": 10 ** 400},
+    {"goals": None},
     {"goals": -1},
     {"age": 80},
     {"position": "Striker"},
@@ -82,3 +87,34 @@ def test_predict_rejects_non_object_body(client, trained):
 
 def test_predict_before_training(client):
     assert client.post("/api/predict", json={}).status_code == 503
+
+
+def test_setup_message_when_only_the_dataset_exists(client, paths):
+    save_dataset({"players": []})
+    body = client.get("/api/state").get_json()
+    assert body["ready"] is False
+    assert body["message"] == "No trained model yet."
+
+
+def test_placeholder_key_is_not_reported_as_set(client, monkeypatch):
+    monkeypatch.setenv("FOOTBALL_DATA_API_KEY", "your-key-here")
+    assert client.get("/api/state").get_json()["api_key_set"] is False
+    monkeypatch.setenv("FOOTBALL_DATA_API_KEY", "abc123")
+    assert client.get("/api/state").get_json()["api_key_set"] is True
+
+
+def test_half_written_model_file_does_not_break_the_app(client, trained, paths):
+    assert client.get("/api/state").get_json()["ready"] is True
+    paths.MODEL_PATH.write_text("", encoding="utf-8")
+    later = os.stat(paths.MODEL_PATH).st_mtime + 10
+    os.utime(paths.MODEL_PATH, (later, later))
+    resp = client.get("/api/state")
+    assert resp.status_code == 200 and resp.get_json()["ready"] is True  # last good copy
+
+
+def test_unreadable_model_file_on_first_load_means_not_ready(client, paths):
+    save_dataset({"players": []})
+    paths.MODEL_PATH.parent.mkdir(parents=True, exist_ok=True)
+    paths.MODEL_PATH.write_text("{not json", encoding="utf-8")
+    resp = client.get("/api/state")
+    assert resp.status_code == 200 and resp.get_json()["ready"] is False

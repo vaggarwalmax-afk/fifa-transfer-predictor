@@ -59,8 +59,8 @@ unreachable or you pass `--no-fpl`, the pipeline still runs:
 
 - minutes are estimated from appearances, and the model then leaves minutes out (an estimate would
   just duplicate appearances)
-- form is inferred from availability: a player who featured in under half of last season's games
-  is "weak", and under a quarter is "injured"
+- form is inferred from availability: a player who featured in under half of the matchdays in
+  their latest season is "weak", and under a quarter is "injured"
 
 **Market values:** no free API offers transfer valuations, so `data/market_values.csv` ships with
 about 120 hand-compiled, **approximate** figures (€m, 2025/26 season). They are a starting point and
@@ -81,7 +81,8 @@ actual fee into the lab to compare against.
   which suits transfer prices. Predictions also stay positive, whereas a plain linear fit in euros
   predicts negative prices for squad players.
 - **Features:**
-  - per-season averages of goals, assists, minutes and appearances over the fetched seasons
+  - per-season averages of goals, assists, minutes and appearances over the fetched seasons (with
+    `--include-current`, the season in progress counts in proportion to the matchdays played)
   - age, plus age² centred on 26, so value can peak mid-career and then decline
   - position (one-hot, midfielder as the baseline)
   - form (one-hot, fit as the baseline)

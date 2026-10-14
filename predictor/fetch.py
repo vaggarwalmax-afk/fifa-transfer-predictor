@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
@@ -13,12 +12,8 @@ from . import config
 from .dataset import load_season_records, match_fpl_elements
 from .football_data import (FootballDataClient, FootballDataError, current_season_start_year,
                             recent_seasons)
-from .fpl import FplClient
-
-
-def _write(path: Path, data: dict) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=1, ensure_ascii=False), encoding="utf-8")
+from .fpl import FplClient, summary_filename
+from .jsonio import write_json as _write
 
 
 def fetch_all(
@@ -40,7 +35,9 @@ def fetch_all(
     competition = fd.competition()
     _write(raw_dir / "competition.json", competition)
     current = current_season_start_year(competition)
-    if not seasons:
+    if seasons:
+        seasons = sorted(set(seasons))  # a repeated season would be counted twice
+    else:
         seasons = recent_seasons(current, season_count, include_current)
     log(f"Premier League seasons: {', '.join(config.season_label(s) for s in seasons)}")
 
@@ -67,7 +64,7 @@ def fetch_all(
             matched = match_fpl_elements(bios, records, bootstrap)
             log(f"FPL: matched {len(matched)}/{len(bios)} players; downloading season histories...")
             for element in matched.values():
-                path = raw_dir / "fpl" / f"element_{element['id']}.json"
+                path = raw_dir / "fpl" / summary_filename(element)
                 if refresh or not path.exists():
                     _write(path, fpl.element_summary(element["id"]))
             fpl_ok = True

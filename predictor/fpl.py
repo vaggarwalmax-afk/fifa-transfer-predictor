@@ -58,7 +58,18 @@ class FplClient:
 def form_from_status(status: str | None, chance_of_playing: int | None = None) -> str | None:
     if not status:
         return None
-    form = STATUS_TO_FORM.get(status)
-    if form == "weak" and chance_of_playing is not None and chance_of_playing <= 25:
+    # A doubtful player with little chance of playing is really injured. Only for 'd':
+    # FPL also sets 0% for players who were sold or can't face their parent club.
+    if status == "d" and chance_of_playing is not None and chance_of_playing <= 25:
         return "injured"
-    return form
+    return STATUS_TO_FORM.get(status)
+
+
+def summary_filename(element: dict) -> str:
+    """Cache file for a player's element-summary.
+
+    Keyed by `code`, which is stable across seasons; element ids are renumbered every
+    season, so an id-keyed cache would hand last season's player 381 to this season's.
+    """
+    code = element.get("code")
+    return f"element_{code}.json" if code is not None else f"element_id{element['id']}.json"
